@@ -7,30 +7,97 @@ filters:
 webr:
   resources:
     - https://jjyh.github.io/npri-default-pfas/Table_1.rds
+    - https://jjyh.github.io/npri-default-pfas/Table_6.rds
+    - https://jjyh.github.io/npri-default-pfas/Table_7.rds
+    - https://jjyh.github.io/npri-default-pfas/Table_8.rds
   packages:
     - DT
+    - dplyr
+    - tidyr
+    - stringr
+    - janitor
+    - glue
+    - readr
 
 ---
 
 ## Quarto
 
+
+
+```{webr}
+#| label: pfas-data-setup
+#| autoplay: true
+#| include: false #hides box completely
+
+APP_CONFIG <- list(
+  limit_mld      = 10,
+  threshold_kg   = 1.0,
+  theme_primary  = "#2c3e50",
+  days_per_year  = 365,
+  ml_to_l        = 1e6,
+  m3_to_l        = 1e3, #new To add to Chris
+  kg_to_g        = 1e3,
+  m3_to_kg       = 1e3,
+  ng_to_kg       = 1e-12,
+  zero_tol       = 1e-9   # Tolerance for filtering empty mass rows
+)
+
+options(scipen = 9999)
+
+#Treatment of Not measured and non detects
+#Not measured = NA
+#Below reporting detection limit = taken 1/2 of the value
+below_detection_limit_factor <- 0.5
+
+#=============
+#helperFunctions
+#=============
+
+clean_pfas <- \(df) {
+  df <- df |> clean_names()
+  if ("pfas" %in% names(df)) df <- df |> rename(substance_name = pfas)
+  if ("substance" %in% names(df)) df <- df |> rename(substance_name = substance)
+  if ("cas" %in% names(df)) df <- df |> rename(cas_rn = cas)
+  
+  df |> 
+    mutate(
+      across(-any_of(c("substance_name", "cas_rn")), \(val) {
+        val_str <- as.character(val)
+        num_val <- suppressWarnings(parse_number(val_str))
+        if_else(str_starts(val_str, "<"), num_val / 2, num_val) #takes care of 0.5RDL
+      }),
+      across(any_of(c("substance_name", "cas_rn")), \(val) str_trim(as.character(val)))
+    )
+}
+
+#=============
+#import
+#=============
+
+dt_reportablePFAS<-readRDS("Table_1.rds")%>% 
+  dplyr::mutate('NPRI_param' = TRUE) 
+bio_spec = read_rds("Table_8.rds") |> clean_pfas()
+eff_spec = read_rds("Table_7.rds") |> clean_pfas()
+effUS_spec = read_rds("Table_6.rds") |> clean_pfas()
+
+```
+
+# Readme
+![Reporting guidance](https://www.canada.ca/en/environment-climate-change/services/national-pollutant-release-inventory/report/pfas.html)
+
 Quarto enables you to weave together content and executable code into a finished document. To learn more about Quarto see <https://quarto.org>.
 
 ```{webr}
-# 1. Read your data
-my_data <- readRDS("Table_1.rds")
-
+#| exercise: pfas-data
 # 2. Render instantly using built-in, non-blocking bootstrap tables
-knitr::kable(head(my_data, n = 5), format = "html", table.attr = "class='table table-striped'")
+knitr::kable(head(dt_reportablePFAS, n = 5), format = "html", table.attr = "class='table table-striped'")
 ```
 
 ```{webr}
-# 1. Read your preloaded target data object
-my_data <- readRDS("Table_1.rds")
-
 # 2. Render the interactive table bundled with browser download hooks
 DT::datatable(
-  head(my_data, 100),               # Exporting a sample preview chunk
+  head(dt_reportablePFAS, 100),               # Exporting a sample preview chunk
   extensions = 'Buttons',           # Activates the DataTables buttons library extension
   options = list(
     dom = 'Bfrtip',                 # 'B' places the action buttons at the very top
@@ -49,4 +116,14 @@ DT::datatable(
     scrollX = TRUE                  # Safeguards wide data frames from leaking out
   )
 )
+```
+
+
+Change the below values according to your plant's annual amount, then click "run code" at the top right of the code-box.
+```{webr-r}
+effluent_L<-999
+biosolid_kg<-123
+
+effluent_L * 1000
+biosolid_kg * 5
 ```

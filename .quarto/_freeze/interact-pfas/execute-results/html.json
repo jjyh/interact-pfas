@@ -1,0 +1,17 @@
+{
+  "hash": "1adf5167d677cfe3c6ab7e8d19bfdbed",
+  "result": {
+    "engine": "knitr",
+    "markdown": "---\ntitle: \"interact-pfas\"\nformat: html\nengine: knitr\nfilters:\n  - webr\nwebr:\n  packages: ['dplyr', 'tidyr','readr', 'readxl', 'stringr', 'janitor', 'gt', 'glue', 'downloadthis']\n---\n\n## Quarto\n\nYou may have noticed when you arrived that ‘WEBR STATUS: 🟡 Loading…’ was shown at the top of the post before changing to ‘🟢 Ready!’ to indicate that the WebR chunks are ready to use.\n\n::: {.cell}\n\n```{.r .cell-code}\n# ==============================================================================\n# CONFIGURATION & CONSTANTS\n# ==============================================================================\nAPP_CONFIG <- list(\n  data_dir       = \"data/rds/\",\n  limit_mld      = 10,\n  threshold_kg   = 1.0,\n  theme_primary  = \"#2c3e50\",\n  days_per_year  = 365,\n  ml_to_l        = 1e6,\n  m3_to_l        = 1e3, #new To add to Chris\n  kg_to_g        = 1e3,\n  m3_to_kg       = 1e3,\n  ng_to_kg       = 1e-12,\n  zero_tol       = 1e-9   # Tolerance for filtering empty mass rows\n)\n\noptions(scipen = 9999)\n\n#Treatment of Not measured and non detects\n#Not measured = NA\n#Below reporting detection limit = taken 1/2 of the value\nbelow_detection_limit_factor <- 0.5\n```\n:::\n\n  \nChange the below values according to your plant's annual amount.\n```{webr-r}\nannual_flow_m3<-999\nannual_biosolids_dryKG<-123\n```\n\n```{webr-r}\nannual_biosolids_dryKG * 1000\nannual_flow_m3 * 5\n```\n\n```{webr-r}\nbelow_detection_limit_factor\n```\n\n",
+    "supporting": [
+      "interact-pfas_files"
+    ],
+    "filters": [
+      "rmarkdown/pagebreak.lua"
+    ],
+    "includes": {},
+    "engineDependencies": {},
+    "preserve": {},
+    "postProcess": true
+  }
+}

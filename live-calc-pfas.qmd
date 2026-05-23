@@ -1,0 +1,52 @@
+---
+title: "pfas-live-html"
+format: live-html
+engine: knitr
+filters:
+  - live
+webr:
+  resources:
+    - https://jjyh.github.io/npri-default-pfas/Table_1.rds
+  packages:
+    - DT
+
+---
+
+## Quarto
+
+Quarto enables you to weave together content and executable code into a finished document. To learn more about Quarto see <https://quarto.org>.
+
+```{webr}
+# 1. Read your data
+my_data <- readRDS("Table_1.rds")
+
+# 2. Render instantly using built-in, non-blocking bootstrap tables
+knitr::kable(head(my_data, n = 5), format = "html", table.attr = "class='table table-striped'")
+```
+
+```{webr}
+# 1. Read your preloaded target data object
+my_data <- readRDS("Table_1.rds")
+
+# 2. Render the interactive table bundled with browser download hooks
+DT::datatable(
+  head(my_data, 100),               # Exporting a sample preview chunk
+  extensions = 'Buttons',           # Activates the DataTables buttons library extension
+  options = list(
+    dom = 'Bfrtip',                 # 'B' places the action buttons at the very top
+    buttons = list(
+      list(
+        extend = 'excel',           # Generates an open-xml excel binary package
+        text = 'Download as Excel', # Text displayed on the clickable layout button
+        title = 'PFAS_Data_Export'  # The default filename assigned when saved
+      ),
+      list(
+        extend = 'csv',             # Backup option for basic comma-separated tables
+        text = 'Download as CSV'
+      )
+    ),
+    pageLength = 10,
+    scrollX = TRUE                  # Safeguards wide data frames from leaking out
+  )
+)
+```

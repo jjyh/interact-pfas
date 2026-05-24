@@ -5,17 +5,8 @@ engine: knitr
 filters:
   - webr
 webr:
-  packages: ['dplyr', 'tidyr','readr', 'readxl', 'stringr', 'janitor', 'gt', 'glue', 'downloadthis', 'htmltools']
-  resources:
-    - data/rds/*
-    - src: https://github.com/jjyh/interact-pfas/raw/refs/heads/master/data/rds
-      value: Table_1.rds
-    - https://github.com/jjyh/interact-pfas/raw/refs/heads/master/data/rds/Table_1.rds
-    - https://github.com/jjyh/interact-pfas/raw/refs/heads/master/data/rds/Table_6.rds
-    - https://github.com/jjyh/interact-pfas/raw/refs/heads/master/data/rds/Table_7.rds
-    - https://github.com/jjyh/interact-pfas/raw/refs/heads/master/data/rds/Table_8.rds
+  packages: ['dplyr', 'tidyr','readr', 'readxl', 'stringr', 'janitor']
 ---
-
 
 ::: {style="display: none;"}
 ```{webr-r}
@@ -42,17 +33,93 @@ APP_CONFIG <- list(
 below_detection_limit_factor <- 0.5
 options(scipen = 9999)
 ```
+
+```{webr-r}
+#| label: helperFunctions
+#| autorun: true
+clean_pfas <- \(df) {
+  df <- df |> clean_names()
+  if ("pfas" %in% names(df)) df <- df |> rename(substance_name = pfas)
+  if ("substance" %in% names(df)) df <- df |> rename(substance_name = substance)
+  if ("cas" %in% names(df)) df <- df |> rename(cas_rn = cas)
+  
+  df |> 
+    mutate(
+      across(-any_of(c("substance_name", "cas_rn")), \(val) {
+        val_str <- as.character(val)
+        num_val <- suppressWarnings(parse_number(val_str))
+        if_else(str_starts(val_str, "<"), num_val / 2, num_val) #takes care of 0.5RDL
+      }),
+      across(any_of(c("substance_name", "cas_rn")), \(val) str_trim(as.character(val)))
+    )
+}
+
+#=====================================
+#function to pick out the columns for the treatment type, aggregate and det. reportability
+aggregate_and_report <- function(type_eff, type_bio){ 
+
+  effMass_p<-eff_mass %>% 
+    select(substance_name, cas_rn, all_of(type_eff))  
+  bioMass_p<-bio_mass %>% 
+    select(substance_name, cas_rn, all_of(type_bio)) 
+  
+  # aggMass_p<-
+  #   full_join(effMass_p, bioMass_p,  by = c("cas_rn", "substance_name") ) %>% 
+  #   mutate(aggregate_kg = !!sym(type_eff) + !!sym(type_bio)) %>% 
+  #   select(-!!sym(type_eff), -!!sym(type_bio)) %>% 
+  #   arrange(desc(aggregate_kg)) %>% 
+  #   mutate(reportable = ifelse(aggregate_kg>1, "TRUE", "FALSE"))
+
+  aggMass_p<-
+    full_join(effMass_p, bioMass_p,  by = c("cas_rn", "substance_name") ) %>% 
+    mutate(aggregate_kg =  if_else(is.na(!!sym(type_eff)) & is.na(!!sym(type_bio)), 
+    NA_real_,                                # Returns a true numeric NA if both are missing
+    coalesce(!!sym(type_eff), 0) + coalesce(!!sym(type_bio), 0)    # Treats individual NAs as 0 and adds them
+    )) %>% 
+    select(-!!sym(type_eff), -!!sym(type_bio)) %>% 
+    arrange(desc(aggregate_kg)) %>% 
+    mutate(reportable = ifelse(aggregate_kg>1, "TRUE", "FALSE"))
+    
+  #Return all three dataframes inside a named list
+  return(list(
+    eff_subset = effMass_p,
+    bio_subset = bioMass_p,
+    agg_report = aggMass_p
+  ))
+}
+```
+
+```{webr-r}
+#| label: import
+#| autorun: true
+url <- "https://jjyh.github.io/npri-default-pfas/Table_1.rds"
+download.file(url, "Table_1.rds")
+dt_reportablePFAS <- readRDS("Table_1.rds")%>% 
+  dplyr::mutate('NPRI_param' = TRUE)
+
+url <- "https://jjyh.github.io/npri-default-pfas/Table_8.rds"
+download.file(url, "Table_8.rds")
+bio_spec <- read_rds("Table_8.rds") |> clean_pfas()
+
+url <- "https://jjyh.github.io/npri-default-pfas/Table_7.rds"
+download.file(url, "Table_7.rds")
+eff_spec <- read_rds("Table_7.rds") |> clean_pfas()
+```
+
 :::
+
 
 Change the below values according to your plant's annual amount.
 ```{webr-r}
 effluent_L<-999
 biosolid_kg<-123
+head(bio_spec)
 ```
 
 ```{webr-r}
 effluent_L * 1000
 biosolid_kg * 5
+head(dt_reportablePFAS)
 ```
 
 
@@ -65,6 +132,7 @@ below_detection_limit_factor
 ```
 
 ```{webr-r}
+#| autorun: true
 url <- "https://jjyh.github.io/npri-default-pfas/Table_1.rds"
 download.file(url, "Table_1.rds")
 # Read the flights data into R
@@ -75,23 +143,34 @@ cat("Let's view the first 6 observations of data:\n")
 head(dummy)
 ```
 
-```{webr}
-# 2. Read your preloaded dataset
-my_data <- readRDS("Table_1.rds")
-table_subset <- head(my_data, n = 5)
 
-# 3. Create your gt table object
-formatted_table <- table_subset %>%
-  gt() %>%
-  tab_header(
-    title = "PFAS Interaction Data",
-    subtitle = "Rendered live via webR"
-  )
 
-# 4. FIX: Disable inlining of CSS styles to fix the webR crash
-html_string <- as_raw_html(formatted_table, inline_css = FALSE)
-
-# 5. Render visually inside the user's browser
-htmltools::HTML(html_string)
+```{r}
+#| echo: false
+#| include: false
+# Force Quarto to map the React compilation engine scripts into the header
+library(reactable)
+reactable(data.frame(x = 1))
 ```
+
+```{webr-r}
+# 1. Install and load necessary libraries
+webr::install("reactable")
+webr::install("htmltools")
+library(reactable)
+library(htmltools)
+
+# 2. Retrieve your preloaded table file
+my_data <- readRDS("Table_1.rds")
+table_subset <- head(my_data, n = 10)
+
+# 3. Build your interactive Reactable layout properties
+react_widget <- reactable(
+  table_subset
+)
+
+# 4. FIX: Use tagList to inject the React table straight into the DOM canvas
+htmltools::tagList(react_widget)
+```
+
 

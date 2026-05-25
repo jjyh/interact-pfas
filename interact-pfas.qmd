@@ -8,13 +8,10 @@ format:
     toc-depth: 5
     toc-expand: 2
     number-sections: true
-    embed-resources: true
 engine: knitr
 filters:
   - webr
 webr:
-  channel-type: "post-message"     # 1. CRITICAL: Prevents Service Worker asset failure
-  show-header-message: true        # 2. Helpful: Shows the loading status text bar
   packages: ['dplyr', 'tidyr','readr', 'readxl', 'stringr', 'janitor', 'knitr']
 ---
 
@@ -128,14 +125,25 @@ bio_spec <- read_rds("Table_8.rds") |> clean_pfas()
 url <- "https://jjyh.github.io/npri-default-pfas/Table_7.rds"
 download.file(url, "Table_7.rds")
 eff_spec <- read_rds("Table_7.rds") |> clean_pfas()
+
+#hard-code workaround for NPRI duplicate column - to remove when NPRI corrects (2026.05.25 - jh)
+bio_spec<-bio_spec |> dplyr::rename(tertiary_treatment_with_alkaline_solids_treatment_gt_90_pct_residential_sources_ng_g_dry_weight_basis = 
+         primary_treatment_with_alkaline_solids_treatment_gt_90_pct_residential_sources_ng_g_dry_weight_basis_14)
+ 
 ```
 
 :::
 
 # Overview
-NPRI Reporting Guidance is available at [Environment Canada](https://www.canada.ca/en/environment-climate-change/services/national-pollutant-release-inventory/report/pfas.html) and summarized by OCWA Compliance at `//ocwfilecorp/Public/Everyone/PCT/CEPA/National Pollutant Release Inventory (NPRI)`
+NPRI Reporting Guidance is available at [Environment Canada](https://www.canada.ca/en/environment-climate-change/services/national-pollutant-release-inventory/report/pfas.html) and summarized by OCWA Compliance at `//ocwfilecorp/Public/Everyone/PCT/CEPA/National Pollutant Release Inventory (NPRI)`.  Please contact Kaylee Saar at Compliance for more reporting principles and specific NPRI module selections.  
+  
+The instruction below pertains only the functionality of the calculator.  Please contact IPOTS (Jane Ho or Chris Adam) for guidance or troubleshooting.  
 
 # Workflow
+::: {.callout-important} 
+**To remove if IT permits standalone html issuance** This html file must be accompanied with its child folder ("interact-pfas-nonStandalone_files") to function with proper formatting.  Both must be unzipped (e.g. if downloaded from OneDrive) and located in the same directory.
+:::
+
 Wait for the above ‘WEBR STATUS: 🟡 Loading…’ shown at the top of the page to change to ‘🟢 Ready!’ to indicate that the calculations code chunks are ready to use.  Users need to click the "Run Code" button at the top left corner of the code chunks to activate calculation for output tables.
   
 1. Enter Facility Input Values, following instructions to execute calculations by **"Run Code"**
@@ -154,6 +162,7 @@ If the two inputs are changed, the  **"Run Code"** and subsequent Treatment Type
 ```{webr-r}
 #| editor-code-line-numbers: 1-2
 #| editor-max-height: 50
+#| editor-word-wrap: true
 effluent_L<-999
 biosolid_kg<-999
 
@@ -178,6 +187,12 @@ names(bio_mass) <- sub("_ng_g_dry_weight_basis$", "_kg", names(bio_mass))
 #   format = "simple", 
 # )
 ```
+
+::: {.callout-note}
+- Do not alter anything in the above code box besides the numbers, and do not enter units beside the numbers (must already be in correct units).  
+- The inputs are at the top of the box contents (so scroll back up within the box if it moved).  
+- It is recommended to reload the page and re-enter the numbers if extraneous information or alterations were made accidentally.
+:::
 
 # Select Treatment Type:
 Please scroll through the list to the right of the webpage to navigate to the treatment type that most closely matches your facility's, then click the "Run Code" there to generate the output table (due to lack of server, there is no download available, please copy and paste the generated output to your files).  Note that these treatment types were defined by ECCC and there may not be an exact match.
@@ -715,6 +730,56 @@ knitr::kable(as.data.frame(rpt$eff_subset), format = "simple" )
 #| editor-max-height: 10
 type_eff = "tertiary_advanced_treatment_with_gt_90_pct_residential_sources_kg"
 type_bio = "tertiary_treatment_with_dewatering_of_solids_gt_90_pct_residential_sources_kg"
+rpt<-aggregate_and_report(type_eff = type_eff,type_bio = type_bio)
+cat("==================================================\n")
+cat("Total: ECCC defaults-derived loads\n")
+cat("Biosolids Type: ", type_bio, "\n")
+cat("Substances available from ECCC defaults: ", nrow(rpt$bio_subset), "\n")
+cat("==================================================\n\n")
+knitr::kable(as.data.frame(rpt$bio_subset), format = "simple" )
+```
+:::
+
+
+### Tertiary, Greater than 90% residential with alkaline treatment of solids
+
+::: {.panel-tabset}
+#### Total (Effluent and Biosolids)
+```{webr-r}
+#| title: Less than 90% residential with dewatering of solids
+#| editor-max-height: 10
+type_eff = "tertiary_advanced_treatment_with_gt_90_pct_residential_sources_kg"
+type_bio = "tertiary_treatment_with_alkaline_solids_treatment_gt_90_pct_residential_sources_kg"
+rpt<-aggregate_and_report(type_eff = type_eff,type_bio = type_bio)
+cat("==================================================\n")
+cat("Total: ECCC defaults-derived loads\n")
+cat("Effluent Type: ", type_eff, "\n")
+cat("Biosolid Type: ", type_bio, "\n")
+cat("Substances available from ECCC defaults: ", nrow(rpt$agg_report), "\n")
+cat("==================================================\n\n")
+knitr::kable(as.data.frame(rpt$agg_report), format = "simple" )
+
+```
+
+#### Effluent
+```{webr-r}
+#| editor-max-height: 10
+type_eff = "tertiary_advanced_treatment_with_lt_90_pct_residential_sources_kg"
+type_bio = "tertiary_treatment_with_alkaline_solids_treatment_gt_90_pct_residential_sources_kg"
+rpt<-aggregate_and_report(type_eff = type_eff,type_bio = type_bio)
+cat("==================================================\n")
+cat("Total: ECCC defaults-derived loads\n")
+cat("Effluent Type: ", type_eff, "\n")
+cat("Substances available from ECCC defaults: ", nrow(rpt$eff_subset), "\n")
+cat("==================================================\n\n")
+knitr::kable(as.data.frame(rpt$eff_subset), format = "simple" )
+```
+
+#### Biosolids
+```{webr-r}
+#| editor-max-height: 10
+type_eff = "tertiary_advanced_treatment_with_lt_90_pct_residential_sources_kg"
+type_bio = "tertiary_treatment_with_alkaline_solids_treatment_gt_90_pct_residential_sources_kg"
 rpt<-aggregate_and_report(type_eff = type_eff,type_bio = type_bio)
 cat("==================================================\n")
 cat("Total: ECCC defaults-derived loads\n")

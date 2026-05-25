@@ -1,0 +1,792 @@
+---
+title: |
+  ![](https://www.ocwa.com/wp-content/uploads/2023/10/logo.svg){width=1in} |NPRI Wastewater PFAS Calcuator, Reporting Year 2025
+author: "OCWA Process Optimization IPOTS (contact: jho@ocwa.com)"
+format: 
+  html:
+    toc: true
+    toc-depth: 5
+    toc-expand: 2
+    number-sections: true
+    embed-resources: true
+engine: knitr
+filters:
+  - webr
+webr:
+  packages: ['dplyr', 'tidyr','readr', 'readxl', 'stringr', 'janitor', 'knitr']
+---
+
+::: {style="display: none;"}
+```{webr-r}
+#| autorun: true
+# ==============================================================================
+# CONFIGURATION & CONSTANTS
+# ==============================================================================
+APP_CONFIG <- list(
+  data_dir       = "data/rds/",
+  sigfig         = 3, 
+  limit_mld      = 10,
+  threshold_kg   = 1.0,
+  theme_primary  = "#2c3e50",
+  days_per_year  = 365,
+  ml_to_l        = 1e6,
+  m3_to_l        = 1e3, #new To add to Chris
+  kg_to_g        = 1e3,
+  m3_to_kg       = 1e3,
+  ng_to_kg       = 1e-12,
+  zero_tol       = 1e-9   # Tolerance for filtering empty mass rows
+)
+#Treatment of Not measured and non detects
+#Not measured = NA
+#Below reporting detection limit = taken 1/2 of the value
+below_detection_limit_factor <- 0.5
+options(scipen = 9999)
+```
+
+```{webr-r}
+#| label: helperFunctions
+#| autorun: true
+clean_pfas <- \(df) {
+  df <- df |> clean_names()
+  if ("pfas" %in% names(df)) df <- df |> rename(substance_name = pfas)
+  if ("substance" %in% names(df)) df <- df |> rename(substance_name = substance)
+  if ("cas" %in% names(df)) df <- df |> rename(cas_rn = cas)
+  
+  df |> 
+    mutate(
+      across(-any_of(c("substance_name", "cas_rn")), \(val) {
+        val_str <- as.character(val)
+        num_val <- suppressWarnings(parse_number(val_str))
+        if_else(str_starts(val_str, "<"), num_val / 2, num_val) #takes care of 0.5RDL
+      }),
+      across(any_of(c("substance_name", "cas_rn")), \(val) str_trim(as.character(val)))
+    )
+}
+#==================
+fmt_sigfigs <- \(v, sig_figs) {
+  # Vectorized check for NA or 0
+  is_zero_or_na <- is.na(v) | v == 0
+  # Format the numeric values safely
+  formatted <- formatC(signif(v, sig_figs), digits = sig_figs, format = "fg", flag = "#")
+  clean_formatted <- sub("\\.$", "", formatted)
+  # Combine using ifelse
+  ifelse(is_zero_or_na, "0", clean_formatted)
+}
+#=====================================
+#function to pick out the columns for the treatment type, aggregate and det. reportability
+aggregate_and_report <- function(type_eff, type_bio){ 
+
+  effMass_p<-eff_mass %>% 
+    select(substance_name, cas_rn, all_of(type_eff))  
+  bioMass_p<-bio_mass %>% 
+    select(substance_name, cas_rn, all_of(type_bio)) 
+  
+  # aggMass_p<-
+  #   full_join(effMass_p, bioMass_p,  by = c("cas_rn", "substance_name") ) %>% 
+  #   mutate(aggregate_kg = !!sym(type_eff) + !!sym(type_bio)) %>% 
+  #   select(-!!sym(type_eff), -!!sym(type_bio)) %>% 
+  #   arrange(desc(aggregate_kg)) %>% 
+  #   mutate(reportable = ifelse(aggregate_kg>1, "TRUE", "FALSE"))
+
+  aggMass_p<-
+    full_join(effMass_p, bioMass_p,  by = c("cas_rn", "substance_name") ) %>% 
+    mutate(aggregate_kg = fmt_sigfigs(
+  if_else(
+    is.na(!!sym(type_eff)) & is.na(!!sym(type_bio)), 
+    NA_real_,                                
+    coalesce(!!sym(type_eff), 0) + coalesce(!!sym(type_bio), 0)
+  ), # <-- This closing parenthesis fixes the error!
+  sig_figs = APP_CONFIG$sigfig
+    )) %>%   # Treats individual NAs as 0 and adds them 
+    select(-!!sym(type_eff), -!!sym(type_bio)) %>% 
+    arrange(desc(aggregate_kg)) %>% 
+    mutate(reportable = ifelse(aggregate_kg>1, "TRUE", "FALSE"))
+    
+  #Return all three dataframes inside a named list
+  return(list(
+    eff_subset = effMass_p,
+    bio_subset = bioMass_p,
+    agg_report = aggMass_p
+  ))
+}
+```
+
+```{webr-r}
+#| label: import
+#| autorun: true
+url <- "https://jjyh.github.io/npri-default-pfas/Table_1.rds"
+download.file(url, "Table_1.rds")
+dt_reportablePFAS <- readRDS("Table_1.rds")%>% 
+  dplyr::mutate('NPRI_param' = TRUE)
+
+url <- "https://jjyh.github.io/npri-default-pfas/Table_8.rds"
+download.file(url, "Table_8.rds")
+bio_spec <- read_rds("Table_8.rds") |> clean_pfas()
+
+url <- "https://jjyh.github.io/npri-default-pfas/Table_7.rds"
+download.file(url, "Table_7.rds")
+eff_spec <- read_rds("Table_7.rds") |> clean_pfas()
+
+#hard-code workaround for NPRI duplicate column - to remove when NPRI corrects (2026.05.25 - jh)
+bio_spec<-bio_spec |> dplyr::rename(tertiary_treatment_with_alkaline_solids_treatment_gt_90_pct_residential_sources_ng_g_dry_weight_basis = 
+         primary_treatment_with_alkaline_solids_treatment_gt_90_pct_residential_sources_ng_g_dry_weight_basis_14)
+ 
+```
+
+:::
+
+# Overview
+NPRI Reporting Guidance is available at [Environment Canada](https://www.canada.ca/en/environment-climate-change/services/national-pollutant-release-inventory/report/pfas.html) and summarized by OCWA Compliance at `//ocwfilecorp/Public/Everyone/PCT/CEPA/National Pollutant Release Inventory (NPRI)`.  Please contact Kaylee Saar at Compliance for more reporting principles and specific NPRI module selections.  
+  
+The instruction below pertains only the functionality of the calculator.  Please contact IPOTS (Jane Ho or Chris Adam) for guidance or troubleshooting.  
+
+# Workflow
+::: {.callout-important} 
+**To remove if IT permits standalone html issuance** This html file must be accompanied with its child folder ("interact-pfas-nonStandalone_files") to function with proper formatting.  Both must be unzipped (e.g. if downloaded from OneDrive) and located in the same directory.
+:::
+
+Wait for the above ‘WEBR STATUS: 🟡 Loading…’ shown at the top of the page to change to ‘🟢 Ready!’ to indicate that the calculations code chunks are ready to use.  Users need to click the "Run Code" button at the top left corner of the code chunks to activate calculation for output tables.
+  
+1. Enter Facility Input Values, following instructions to execute calculations by **"Run Code"**
+2. At the Table of contents on the right side of the page, select the treatment type that best matches your facility's.  Note that the selection is contrained by ECCC available categorization and there may not be an exact match.
+3. Click **"Run Code"** at the treatment type section, to generate aggregate (e.g. effluent plus biosolids associated PFAS mass) mass of each PFAS.  Each individual NPRI PFAS with a quantity (aggregate_kg) ≥1 kg must be reported (denoted as reportable "TRUE").
+
+# Facility Input Values
+
+**Instructions:**
+  
+1. Change the below values according to your plant's annual amount.  Enter numeric values to replace the green "999"s without suffixing any units (values must already be in Litres and dry Kilograms, respectively)  
+
+2. Click **"Run Code"** below to generate the report data.
+  
+If the two inputs are changed, the  **"Run Code"** and subsequent Treatment Type tables **"Run Code"** buttons must be clicked again to refresh calculation. 
+```{webr-r}
+#| editor-code-line-numbers: 1-2
+#| editor-max-height: 50
+#| editor-word-wrap: true
+effluent_L<-999
+biosolid_kg<-999
+
+#mass-multiply liquid stream to kg 
+eff_mass <-eff_spec %>%
+  mutate(across(
+    .col = -c(cas_rn, substance_name),
+    .fns = ~. * effluent_L* APP_CONFIG$ng_to_kg
+  ))
+names(eff_mass) <- sub("_ng_l$", "_kg", names(eff_mass))
+  
+bio_mass <- bio_spec %>% 
+  mutate(across(
+    .cols = -c(cas_rn, substance_name),
+    .fns = ~. * biosolid_kg * APP_CONFIG$kg_to_g * APP_CONFIG$ng_to_kg
+  ))
+names(bio_mass) <- sub("_ng_g_dry_weight_basis$", "_kg", names(bio_mass))
+
+# test echo to check it worked
+# knitr::kable(
+#   head(dt_reportablePFAS), 
+#   format = "simple", 
+# )
+```
+
+::: {.callout-note}
+- Do not alter anything in the above code box besides the numbers, and do not enter units beside the numbers (must already be in correct units).  
+- The inputs are at the top of the box contents (so scroll back up within the box if it moved).  
+- It is recommended to reload the page and re-enter the numbers if extraneous information or alterations were made accidentally.
+:::
+
+# Select Treatment Type:
+Please scroll through the list to the right of the webpage to navigate to the treatment type that most closely matches your facility's, then click the "Run Code" there to generate the output table (due to lack of server, there is no download available, please copy and paste the generated output to your files).  Note that these treatment types were defined by ECCC and there may not be an exact match.
+
+## Primary Treatment
+### Primary Treatment, Greater than 90% res. source & dewatering of solids
+
+::: {.panel-tabset}
+#### Total (Effluent and Biosolids)
+```{webr-r}
+#| title: Greater than 90% res. source & dewatering of solids
+#| editor-max-height: 10
+type_eff = "primary_treatment_with_gt_90_pct_residential_sources_kg"
+type_bio = "primary_treatment_with_dewatering_of_solids_gt_90_pct_residential_sources_kg"
+rpt<-aggregate_and_report(type_eff = type_eff,type_bio = type_bio)
+cat("==================================================\n")
+cat("Total: ECCC defaults-derived loads\n")
+cat("Effluent Type: ", type_eff, "\n")
+cat("Biosolid Type: ", type_bio, "\n")
+cat("Substances available from ECCC defaults: ", nrow(rpt$agg_report), "\n")
+cat("==================================================\n\n")
+knitr::kable(as.data.frame(rpt$agg_report), format = "simple" )
+
+```
+
+#### Effluent
+```{webr-r}
+#| editor-max-height: 10
+type_bio = "primary_treatment_with_dewatering_of_solids_gt_90_pct_residential_sources_kg"
+type_eff = "primary_treatment_with_gt_90_pct_residential_sources_kg"
+rpt<-aggregate_and_report(type_eff = type_eff,type_bio = type_bio)
+cat("==================================================\n")
+cat("Total: ECCC defaults-derived loads\n")
+cat("Effluent Type: ", type_eff, "\n")
+cat("Substances available from ECCC defaults: ", nrow(rpt$eff_subset), "\n")
+cat("==================================================\n\n")
+knitr::kable(as.data.frame(rpt$eff_subset), format = "simple" )
+```
+
+#### Biosolids
+```{webr-r}
+#| editor-max-height: 10
+type_bio = "primary_treatment_with_dewatering_of_solids_gt_90_pct_residential_sources_kg"
+type_eff = "primary_treatment_with_gt_90_pct_residential_sources_kg"
+rpt<-aggregate_and_report(type_eff = type_eff,type_bio = type_bio)
+cat("==================================================\n")
+cat("Total: ECCC defaults-derived loads\n")
+cat("Biosolids Type: ", type_bio, "\n")
+cat("Substances available from ECCC defaults: ", nrow(rpt$bio_subset), "\n")
+cat("==================================================\n\n")
+knitr::kable(as.data.frame(rpt$bio_subset), format = "simple" )
+```
+:::
+
+### Primary Treatment, Greater than 90% res. source & alkaline solid treatment
+
+::: {.panel-tabset}
+#### Total (Effluent and Biosolids)
+```{webr-r}
+#| title: Greater than 90% res. source & alkaline solid treatment
+#| editor-max-height: 10
+type_eff = "primary_treatment_with_gt_90_pct_residential_sources_kg"
+type_bio = "primary_treatment_with_alkaline_solids_treatment_gt_90_pct_residential_sources_ng_g_dry_weight_basis_5"
+rpt<-aggregate_and_report(type_eff = type_eff,type_bio = type_bio)
+cat("==================================================\n")
+cat("Total: ECCC defaults-derived loads\n")
+cat("Effluent Type: ", type_eff, "\n")
+cat("Biosolid Type: ", type_bio, "\n")
+cat("Substances available from ECCC defaults: ", nrow(rpt$agg_report), "\n")
+cat("==================================================\n\n")
+knitr::kable(as.data.frame(rpt$agg_report), format = "simple" )
+```
+
+#### Effluent
+```{webr-r}
+#| editor-max-height: 10
+type_eff = "primary_treatment_with_gt_90_pct_residential_sources_kg"
+type_bio = "primary_treatment_with_alkaline_solids_treatment_gt_90_pct_residential_sources_ng_g_dry_weight_basis_5"
+rpt<-aggregate_and_report(type_eff = type_eff,type_bio = type_bio)
+cat("==================================================\n")
+cat("Total: ECCC defaults-derived loads\n")
+cat("Effluent Type: ", type_eff, "\n")
+cat("Substances available from ECCC defaults: ", nrow(rpt$eff_subset), "\n")
+cat("==================================================\n\n")
+knitr::kable(as.data.frame(rpt$eff_subset), format = "simple" )
+```
+
+#### Biosolids
+```{webr-r}
+#| editor-max-height: 10
+type_eff = "primary_treatment_with_gt_90_pct_residential_sources_kg"
+type_bio = "primary_treatment_with_alkaline_solids_treatment_gt_90_pct_residential_sources_ng_g_dry_weight_basis_5"
+rpt<-aggregate_and_report(type_eff = type_eff,type_bio = type_bio)
+cat("==================================================\n")
+cat("Total: ECCC defaults-derived loads\n")
+cat("Biosolids Type: ", type_bio, "\n")
+cat("Substances available from ECCC defaults: ", nrow(rpt$bio_subset), "\n")
+cat("==================================================\n\n")
+knitr::kable(as.data.frame(rpt$bio_subset), format = "simple" )
+```
+:::
+
+### Primary Treatment, Greater than 90% res. source & anaerobic digestion of solid
+
+::: {.panel-tabset}
+#### Total (Effluent and Biosolids)
+```{webr-r}
+#| title: Greater than 90% res. source & anaerobic digestion of solid
+#| editor-max-height: 10
+type_eff = "primary_treatment_with_gt_90_pct_residential_sources_kg"
+type_bio = "primary_treatment_with_anerobic_digestion_of_solids_gt_90_pct_residential_sources_kg"
+rpt<-aggregate_and_report(type_eff = type_eff,type_bio = type_bio)
+cat("==================================================\n")
+cat("Total: ECCC defaults-derived loads\n")
+cat("Effluent Type: ", type_eff, "\n")
+cat("Biosolid Type: ", type_bio, "\n")
+cat("Substances available from ECCC defaults: ", nrow(rpt$agg_report), "\n")
+cat("==================================================\n\n")
+knitr::kable(as.data.frame(rpt$agg_report), format = "simple" )
+
+```
+
+#### Effluent
+```{webr-r}
+#| editor-max-height: 10
+type_eff = "primary_treatment_with_gt_90_pct_residential_sources_kg"
+type_bio = "primary_treatment_with_anerobic_digestion_of_solids_gt_90_pct_residential_sources_kg"
+rpt<-aggregate_and_report(type_eff = type_eff,type_bio = type_bio)
+cat("==================================================\n")
+cat("Total: ECCC defaults-derived loads\n")
+cat("Effluent Type: ", type_eff, "\n")
+cat("Substances available from ECCC defaults: ", nrow(rpt$eff_subset), "\n")
+cat("==================================================\n\n")
+knitr::kable(as.data.frame(rpt$eff_subset), format = "simple" )
+```
+
+#### Biosolids
+```{webr-r}
+#| editor-max-height: 10
+type_eff = "primary_treatment_with_gt_90_pct_residential_sources_kg"
+type_bio = "primary_treatment_with_anerobic_digestion_of_solids_gt_90_pct_residential_sources_kg"
+rpt<-aggregate_and_report(type_eff = type_eff,type_bio = type_bio)
+cat("==================================================\n")
+cat("Total: ECCC defaults-derived loads\n")
+cat("Biosolids Type: ", type_bio, "\n")
+cat("Substances available from ECCC defaults: ", nrow(rpt$bio_subset), "\n")
+cat("==================================================\n\n")
+knitr::kable(as.data.frame(rpt$bio_subset), format = "simple" )
+```
+:::
+
+### Primary Treatment, Less than 90% res. source
+
+::: {.panel-tabset}
+#### Total (Effluent and Biosolids)
+```{webr-r}
+#| title: Less than 90% res. source
+#| editor-max-height: 10
+type_eff = "primary_treatment_with_lt_90_pct_residential_sources_kg"
+type_bio = "primary_treatment_with_dewatering_of_solids_lt_90_pct_residential_sources_kg"
+rpt<-aggregate_and_report(type_eff = type_eff,type_bio = type_bio)
+cat("==================================================\n")
+cat("Total: ECCC defaults-derived loads\n")
+cat("Effluent Type: ", type_eff, "\n")
+cat("Biosolid Type: ", type_bio, "\n")
+cat("Substances available from ECCC defaults: ", nrow(rpt$agg_report), "\n")
+cat("==================================================\n\n")
+knitr::kable(as.data.frame(rpt$agg_report), format = "simple" )
+
+```
+
+#### Effluent
+```{webr-r}
+#| editor-max-height: 10
+type_eff = "primary_treatment_with_lt_90_pct_residential_sources_kg"
+type_bio = "primary_treatment_with_dewatering_of_solids_lt_90_pct_residential_sources_kg"
+rpt<-aggregate_and_report(type_eff = type_eff,type_bio = type_bio)
+cat("==================================================\n")
+cat("Total: ECCC defaults-derived loads\n")
+cat("Effluent Type: ", type_eff, "\n")
+cat("Substances available from ECCC defaults: ", nrow(rpt$eff_subset), "\n")
+cat("==================================================\n\n")
+knitr::kable(as.data.frame(rpt$eff_subset), format = "simple" )
+```
+
+#### Biosolids
+```{webr-r}
+#| editor-max-height: 10
+type_eff = "primary_treatment_with_lt_90_pct_residential_sources_kg"
+type_bio = "primary_treatment_with_dewatering_of_solids_lt_90_pct_residential_sources_kg"
+rpt<-aggregate_and_report(type_eff = type_eff,type_bio = type_bio)
+cat("==================================================\n")
+cat("Total: ECCC defaults-derived loads\n")
+cat("Biosolids Type: ", type_bio, "\n")
+cat("Substances available from ECCC defaults: ", nrow(rpt$bio_subset), "\n")
+cat("==================================================\n\n")
+knitr::kable(as.data.frame(rpt$bio_subset), format = "simple" )
+```
+:::
+
+## Secondary Treatment
+
+### Secondary Treatment, Less than 70% res. source with anaerobic digestion of solids
+
+::: {.panel-tabset}
+#### Total (Effluent and Biosolids)
+```{webr-r}
+#| title: Less than 70% res. source with anaerobic digestion of solids
+#| editor-max-height: 10
+type_eff = "secondary_treatment_with_lt_70_pct_residential_sources_kg"
+type_bio = "secondary_treatment_with_anerobic_digestion_of_solids_lt_70_pct_residential_sources_kg"
+rpt<-aggregate_and_report(type_eff = type_eff,type_bio = type_bio)
+cat("==================================================\n")
+cat("Total: ECCC defaults-derived loads\n")
+cat("Effluent Type: ", type_eff, "\n")
+cat("Biosolid Type: ", type_bio, "\n")
+cat("Substances available from ECCC defaults: ", nrow(rpt$agg_report), "\n")
+cat("==================================================\n\n")
+knitr::kable(as.data.frame(rpt$agg_report), format = "simple" )
+
+```
+
+#### Effluent
+```{webr-r}
+#| editor-max-height: 10
+type_eff = "secondary_treatment_with_lt_70_pct_residential_sources_kg"
+type_bio = "secondary_treatment_with_anerobic_digestion_of_solids_lt_70_pct_residential_sources_kg"
+rpt<-aggregate_and_report(type_eff = type_eff,type_bio = type_bio)
+cat("==================================================\n")
+cat("Total: ECCC defaults-derived loads\n")
+cat("Effluent Type: ", type_eff, "\n")
+cat("Substances available from ECCC defaults: ", nrow(rpt$eff_subset), "\n")
+cat("==================================================\n\n")
+knitr::kable(as.data.frame(rpt$eff_subset), format = "simple" )
+```
+
+#### Biosolids
+```{webr-r}
+#| editor-max-height: 10
+type_eff = "secondary_treatment_with_lt_70_pct_residential_sources_kg"
+type_bio = "secondary_treatment_with_anerobic_digestion_of_solids_lt_70_pct_residential_sources_kg"
+rpt<-aggregate_and_report(type_eff = type_eff,type_bio = type_bio)
+cat("==================================================\n")
+cat("Total: ECCC defaults-derived loads\n")
+cat("Biosolids Type: ", type_bio, "\n")
+cat("Substances available from ECCC defaults: ", nrow(rpt$bio_subset), "\n")
+cat("==================================================\n\n")
+knitr::kable(as.data.frame(rpt$bio_subset), format = "simple" )
+```
+:::
+
+### Secondary Treatment, Less than 70% res. source with anaerobic digestion & pelletization of solids
+
+::: {.panel-tabset}
+#### Total (Effluent and Biosolids)
+```{webr-r}
+#| title: Less than 70% residential with anaerobic digestion & pelletization of solids
+#| editor-max-height: 10
+type_eff = "secondary_treatment_with_lt_70_pct_residential_sources_kg"
+type_bio = "secondary_treatment_with_anerobic_digestion_and_pelletization_of_solids_lt_70_pct_residential_sources_kg"
+rpt<-aggregate_and_report(type_eff = type_eff,type_bio = type_bio)
+cat("==================================================\n")
+cat("Total: ECCC defaults-derived loads\n")
+cat("Effluent Type: ", type_eff, "\n")
+cat("Biosolid Type: ", type_bio, "\n")
+cat("Substances available from ECCC defaults: ", nrow(rpt$agg_report), "\n")
+cat("==================================================\n\n")
+knitr::kable(as.data.frame(rpt$agg_report), format = "simple" )
+
+```
+
+#### Effluent
+```{webr-r}
+#| editor-max-height: 10
+type_eff = "secondary_treatment_with_lt_70_pct_residential_sources_kg"
+type_bio = "secondary_treatment_with_anerobic_digestion_and_pelletization_of_solids_lt_70_pct_residential_sources_kg"
+rpt<-aggregate_and_report(type_eff = type_eff,type_bio = type_bio)
+cat("==================================================\n")
+cat("Total: ECCC defaults-derived loads\n")
+cat("Effluent Type: ", type_eff, "\n")
+cat("Substances available from ECCC defaults: ", nrow(rpt$eff_subset), "\n")
+cat("==================================================\n\n")
+knitr::kable(as.data.frame(rpt$eff_subset), format = "simple" )
+```
+
+#### Biosolids
+```{webr-r}
+#| editor-max-height: 10
+type_eff = "secondary_treatment_with_lt_70_pct_residential_sources_kg"
+type_bio = "secondary_treatment_with_anerobic_digestion_and_pelletization_of_solids_lt_70_pct_residential_sources_kg"
+rpt<-aggregate_and_report(type_eff = type_eff,type_bio = type_bio)
+cat("==================================================\n")
+cat("Total: ECCC defaults-derived loads\n")
+cat("Biosolids Type: ", type_bio, "\n")
+cat("Substances available from ECCC defaults: ", nrow(rpt$bio_subset), "\n")
+cat("==================================================\n\n")
+knitr::kable(as.data.frame(rpt$bio_subset), format = "simple" )
+```
+:::
+
+### Secondary Treatment, 70%-90% residential with anaerobic digestion of solids
+
+::: {.panel-tabset}
+#### Total (Effluent and Biosolids)
+```{webr-r}
+#| title: 70%-90% residential with anaerobic digestion of solids
+#| editor-max-height: 10
+type_eff = "secondary_treatment_with_70_pct_90_pct_residential_sources_kg"
+type_bio = "secondary_treatment_with_anerobic_digestion_of_solids_70_pct_90_pct_residential_sources_kg"
+rpt<-aggregate_and_report(type_eff = type_eff,type_bio = type_bio)
+cat("==================================================\n")
+cat("Total: ECCC defaults-derived loads\n")
+cat("Effluent Type: ", type_eff, "\n")
+cat("Biosolid Type: ", type_bio, "\n")
+cat("Substances available from ECCC defaults: ", nrow(rpt$agg_report), "\n")
+cat("==================================================\n\n")
+knitr::kable(as.data.frame(rpt$agg_report), format = "simple" )
+
+```
+
+#### Effluent
+```{webr-r}
+#| editor-max-height: 10
+type_eff = "secondary_treatment_with_70_pct_90_pct_residential_sources_kg"
+type_bio = "secondary_treatment_with_anerobic_digestion_of_solids_70_pct_90_pct_residential_sources_kg"
+rpt<-aggregate_and_report(type_eff = type_eff,type_bio = type_bio)
+cat("==================================================\n")
+cat("Total: ECCC defaults-derived loads\n")
+cat("Effluent Type: ", type_eff, "\n")
+cat("Substances available from ECCC defaults: ", nrow(rpt$eff_subset), "\n")
+cat("==================================================\n\n")
+knitr::kable(as.data.frame(rpt$eff_subset), format = "simple" )
+```
+
+#### Biosolids
+```{webr-r}
+#| editor-max-height: 10
+type_eff = "secondary_treatment_with_70_pct_90_pct_residential_sources_kg"
+type_bio = "secondary_treatment_with_anerobic_digestion_of_solids_70_pct_90_pct_residential_sources_kg"
+rpt<-aggregate_and_report(type_eff = type_eff,type_bio = type_bio)
+cat("==================================================\n")
+cat("Total: ECCC defaults-derived loads\n")
+cat("Biosolids Type: ", type_bio, "\n")
+cat("Substances available from ECCC defaults: ", nrow(rpt$bio_subset), "\n")
+cat("==================================================\n\n")
+knitr::kable(as.data.frame(rpt$bio_subset), format = "simple" )
+```
+:::
+
+### Secondary Treatment, Greater than 90% residential with anaerobic digestion of solids
+
+::: {.panel-tabset}
+#### Total (Effluent and Biosolids)
+```{webr-r}
+#| title: Greater than 90% residential with anaerobic digestion of solids
+#| editor-max-height: 10
+type_eff = "secondary_treatment_with_gt_90_pct_residential_sources_kg"
+type_bio = "secondary_treatment_with_anerobic_digestion_of_solids_gt_90_pct_residential_sources_kg"
+rpt<-aggregate_and_report(type_eff = type_eff,type_bio = type_bio)
+cat("==================================================\n")
+cat("Total: ECCC defaults-derived loads\n")
+cat("Effluent Type: ", type_eff, "\n")
+cat("Biosolid Type: ", type_bio, "\n")
+cat("Substances available from ECCC defaults: ", nrow(rpt$agg_report), "\n")
+cat("==================================================\n\n")
+knitr::kable(as.data.frame(rpt$agg_report), format = "simple" )
+
+```
+
+#### Effluent
+```{webr-r}
+#| editor-max-height: 10
+type_eff = "secondary_treatment_with_gt_90_pct_residential_sources_kg"
+type_bio = "secondary_treatment_with_anerobic_digestion_of_solids_gt_90_pct_residential_sources_kg"
+rpt<-aggregate_and_report(type_eff = type_eff,type_bio = type_bio)
+cat("==================================================\n")
+cat("Total: ECCC defaults-derived loads\n")
+cat("Effluent Type: ", type_eff, "\n")
+cat("Substances available from ECCC defaults: ", nrow(rpt$eff_subset), "\n")
+cat("==================================================\n\n")
+knitr::kable(as.data.frame(rpt$eff_subset), format = "simple" )
+```
+
+#### Biosolids
+```{webr-r}
+#| editor-max-height: 10
+type_eff = "secondary_treatment_with_gt_90_pct_residential_sources_kg"
+type_bio = "secondary_treatment_with_anerobic_digestion_of_solids_gt_90_pct_residential_sources_kg"
+rpt<-aggregate_and_report(type_eff = type_eff,type_bio = type_bio)
+cat("==================================================\n")
+cat("Total: ECCC defaults-derived loads\n")
+cat("Biosolids Type: ", type_bio, "\n")
+cat("Substances available from ECCC defaults: ", nrow(rpt$bio_subset), "\n")
+cat("==================================================\n\n")
+knitr::kable(as.data.frame(rpt$bio_subset), format = "simple" )
+```
+:::
+
+### Secondary Treatment, Greater than 90% residential with anaerobic digestion & dewatering of solids
+
+::: {.panel-tabset}
+#### Total (Effluent and Biosolids)
+```{webr-r}
+#| title: Greater than 90% residential with anaerobic digestion & dewatering of solids
+#| editor-max-height: 10
+type_eff = "secondary_treatment_with_gt_90_pct_residential_sources_kg"
+type_bio = "secondary_treatment_with_dewatering_of_solids_gt_90_pct_residential_sources_kg"
+rpt<-aggregate_and_report(type_eff = type_eff,type_bio = type_bio)
+cat("==================================================\n")
+cat("Total: ECCC defaults-derived loads\n")
+cat("Effluent Type: ", type_eff, "\n")
+cat("Biosolid Type: ", type_bio, "\n")
+cat("Substances available from ECCC defaults: ", nrow(rpt$agg_report), "\n")
+cat("==================================================\n\n")
+knitr::kable(as.data.frame(rpt$agg_report), format = "simple" )
+
+```
+
+#### Effluent
+```{webr-r}
+#| editor-max-height: 10
+type_eff = "secondary_treatment_with_gt_90_pct_residential_sources_kg"
+type_bio = "secondary_treatment_with_dewatering_of_solids_gt_90_pct_residential_sources_kg"
+rpt<-aggregate_and_report(type_eff = type_eff,type_bio = type_bio)
+cat("==================================================\n")
+cat("Total: ECCC defaults-derived loads\n")
+cat("Effluent Type: ", type_eff, "\n")
+cat("Substances available from ECCC defaults: ", nrow(rpt$eff_subset), "\n")
+cat("==================================================\n\n")
+knitr::kable(as.data.frame(rpt$eff_subset), format = "simple" )
+```
+
+#### Biosolids
+```{webr-r}
+#| editor-max-height: 10
+type_eff = "secondary_treatment_with_gt_90_pct_residential_sources_kg"
+type_bio = "secondary_treatment_with_dewatering_of_solids_gt_90_pct_residential_sources_kg"
+rpt<-aggregate_and_report(type_eff = type_eff,type_bio = type_bio)
+cat("==================================================\n")
+cat("Total: ECCC defaults-derived loads\n")
+cat("Biosolids Type: ", type_bio, "\n")
+cat("Substances available from ECCC defaults: ", nrow(rpt$bio_subset), "\n")
+cat("==================================================\n\n")
+knitr::kable(as.data.frame(rpt$bio_subset), format = "simple" )
+```
+:::
+
+## Tertiary
+
+### Tertiary, Less than 90% residential with dewatering of solids
+
+::: {.panel-tabset}
+#### Total (Effluent and Biosolids)
+```{webr-r}
+#| title: Less than 90% residential with dewatering of solids
+#| editor-max-height: 10
+type_eff = "tertiary_advanced_treatment_with_lt_90_pct_residential_sources_kg"
+type_bio = "tertiary_treatment_with_dewatering_of_solids_lt_90_pct_residential_sources_kg"
+rpt<-aggregate_and_report(type_eff = type_eff,type_bio = type_bio)
+cat("==================================================\n")
+cat("Total: ECCC defaults-derived loads\n")
+cat("Effluent Type: ", type_eff, "\n")
+cat("Biosolid Type: ", type_bio, "\n")
+cat("Substances available from ECCC defaults: ", nrow(rpt$agg_report), "\n")
+cat("==================================================\n\n")
+knitr::kable(as.data.frame(rpt$agg_report), format = "simple" )
+
+```
+
+#### Effluent
+```{webr-r}
+#| editor-max-height: 10
+type_eff = "tertiary_advanced_treatment_with_lt_90_pct_residential_sources_kg"
+type_bio = "tertiary_treatment_with_dewatering_of_solids_lt_90_pct_residential_sources_kg"
+rpt<-aggregate_and_report(type_eff = type_eff,type_bio = type_bio)
+cat("==================================================\n")
+cat("Total: ECCC defaults-derived loads\n")
+cat("Effluent Type: ", type_eff, "\n")
+cat("Substances available from ECCC defaults: ", nrow(rpt$eff_subset), "\n")
+cat("==================================================\n\n")
+knitr::kable(as.data.frame(rpt$eff_subset), format = "simple" )
+```
+
+#### Biosolids
+```{webr-r}
+#| editor-max-height: 10
+type_eff = "tertiary_advanced_treatment_with_lt_90_pct_residential_sources_kg"
+type_bio = "tertiary_treatment_with_dewatering_of_solids_lt_90_pct_residential_sources_kg"
+rpt<-aggregate_and_report(type_eff = type_eff,type_bio = type_bio)
+cat("==================================================\n")
+cat("Total: ECCC defaults-derived loads\n")
+cat("Biosolids Type: ", type_bio, "\n")
+cat("Substances available from ECCC defaults: ", nrow(rpt$bio_subset), "\n")
+cat("==================================================\n\n")
+knitr::kable(as.data.frame(rpt$bio_subset), format = "simple" )
+```
+:::
+
+### Tertiary, Greater than 90% residential with dewatering of solids
+
+::: {.panel-tabset}
+#### Total (Effluent and Biosolids)
+```{webr-r}
+#| title: Greater than 90% residential with dewatering of solids
+#| editor-max-height: 10
+type_eff = "tertiary_advanced_treatment_with_gt_90_pct_residential_sources_kg"
+type_bio = "tertiary_treatment_with_dewatering_of_solids_gt_90_pct_residential_sources_kg"
+rpt<-aggregate_and_report(type_eff = type_eff,type_bio = type_bio)
+cat("==================================================\n")
+cat("Total: ECCC defaults-derived loads\n")
+cat("Effluent Type: ", type_eff, "\n")
+cat("Biosolid Type: ", type_bio, "\n")
+cat("Substances available from ECCC defaults: ", nrow(rpt$agg_report), "\n")
+cat("==================================================\n\n")
+knitr::kable(as.data.frame(rpt$agg_report), format = "simple" )
+
+```
+
+#### Effluent
+```{webr-r}
+#| editor-max-height: 10
+type_eff = "tertiary_advanced_treatment_with_gt_90_pct_residential_sources_kg"
+type_bio = "tertiary_treatment_with_dewatering_of_solids_gt_90_pct_residential_sources_kg"
+rpt<-aggregate_and_report(type_eff = type_eff,type_bio = type_bio)
+cat("==================================================\n")
+cat("Total: ECCC defaults-derived loads\n")
+cat("Effluent Type: ", type_eff, "\n")
+cat("Substances available from ECCC defaults: ", nrow(rpt$eff_subset), "\n")
+cat("==================================================\n\n")
+knitr::kable(as.data.frame(rpt$eff_subset), format = "simple" )
+```
+
+#### Biosolids
+```{webr-r}
+#| editor-max-height: 10
+type_eff = "tertiary_advanced_treatment_with_gt_90_pct_residential_sources_kg"
+type_bio = "tertiary_treatment_with_dewatering_of_solids_gt_90_pct_residential_sources_kg"
+rpt<-aggregate_and_report(type_eff = type_eff,type_bio = type_bio)
+cat("==================================================\n")
+cat("Total: ECCC defaults-derived loads\n")
+cat("Biosolids Type: ", type_bio, "\n")
+cat("Substances available from ECCC defaults: ", nrow(rpt$bio_subset), "\n")
+cat("==================================================\n\n")
+knitr::kable(as.data.frame(rpt$bio_subset), format = "simple" )
+```
+:::
+
+
+### Tertiary, Greater than 90% residential with alkaline treatment of solids
+
+::: {.panel-tabset}
+#### Total (Effluent and Biosolids)
+```{webr-r}
+#| title: Less than 90% residential with dewatering of solids
+#| editor-max-height: 10
+type_eff = "tertiary_advanced_treatment_with_gt_90_pct_residential_sources_kg"
+type_bio = "tertiary_treatment_with_alkaline_solids_treatment_gt_90_pct_residential_sources_kg"
+rpt<-aggregate_and_report(type_eff = type_eff,type_bio = type_bio)
+cat("==================================================\n")
+cat("Total: ECCC defaults-derived loads\n")
+cat("Effluent Type: ", type_eff, "\n")
+cat("Biosolid Type: ", type_bio, "\n")
+cat("Substances available from ECCC defaults: ", nrow(rpt$agg_report), "\n")
+cat("==================================================\n\n")
+knitr::kable(as.data.frame(rpt$agg_report), format = "simple" )
+
+```
+
+#### Effluent
+```{webr-r}
+#| editor-max-height: 10
+type_eff = "tertiary_advanced_treatment_with_lt_90_pct_residential_sources_kg"
+type_bio = "tertiary_treatment_with_alkaline_solids_treatment_gt_90_pct_residential_sources_kg"
+rpt<-aggregate_and_report(type_eff = type_eff,type_bio = type_bio)
+cat("==================================================\n")
+cat("Total: ECCC defaults-derived loads\n")
+cat("Effluent Type: ", type_eff, "\n")
+cat("Substances available from ECCC defaults: ", nrow(rpt$eff_subset), "\n")
+cat("==================================================\n\n")
+knitr::kable(as.data.frame(rpt$eff_subset), format = "simple" )
+```
+
+#### Biosolids
+```{webr-r}
+#| editor-max-height: 10
+type_eff = "tertiary_advanced_treatment_with_lt_90_pct_residential_sources_kg"
+type_bio = "tertiary_treatment_with_alkaline_solids_treatment_gt_90_pct_residential_sources_kg"
+rpt<-aggregate_and_report(type_eff = type_eff,type_bio = type_bio)
+cat("==================================================\n")
+cat("Total: ECCC defaults-derived loads\n")
+cat("Biosolids Type: ", type_bio, "\n")
+cat("Substances available from ECCC defaults: ", nrow(rpt$bio_subset), "\n")
+cat("==================================================\n\n")
+knitr::kable(as.data.frame(rpt$bio_subset), format = "simple" )
+```
+:::

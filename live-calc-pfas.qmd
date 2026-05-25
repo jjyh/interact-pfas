@@ -21,14 +21,22 @@ webr:
 
 ---
 
+## Readme
+Please allow page to fully load, i.e. all "Downloading [...] packages" at the lower right hand corner of the browser to disappear) prior to use.  
+
 ## Quarto
 
 
 
 ```{webr}
-#| label: pfas-data-setup
-#| autoplay: true
-#| include: false #hides box completely
+#| label: global-setup
+#| autoplay: false
+#| echo: true
+#| edit: true
+#| max-lines: 4
+
+effluent_L<-999
+biosolid_kg<-123
 
 APP_CONFIG <- list(
   limit_mld      = 10,
@@ -53,7 +61,7 @@ below_detection_limit_factor <- 0.5
 #=============
 #helperFunctions
 #=============
-
+# functio for cleaning reference table
 clean_pfas <- \(df) {
   df <- df |> clean_names()
   if ("pfas" %in% names(df)) df <- df |> rename(substance_name = pfas)
@@ -70,7 +78,39 @@ clean_pfas <- \(df) {
       across(any_of(c("substance_name", "cas_rn")), \(val) str_trim(as.character(val)))
     )
 }
+#=====================
+#function to pick out the columns for the treatment type, aggregate and det. reportability
+aggregate_and_report <- function(type_eff, type_bio){ 
 
+  effMass_p<-eff_mass %>% 
+    select(substance_name, cas_rn, all_of(type_eff))  
+  bioMass_p<-bio_mass %>% 
+    select(substance_name, cas_rn, all_of(type_bio)) 
+  
+  # aggMass_p<-
+  #   full_join(effMass_p, bioMass_p,  by = c("cas_rn", "substance_name") ) %>% 
+  #   mutate(aggregate_kg = !!sym(type_eff) + !!sym(type_bio)) %>% 
+  #   select(-!!sym(type_eff), -!!sym(type_bio)) %>% 
+  #   arrange(desc(aggregate_kg)) %>% 
+  #   mutate(reportable = ifelse(aggregate_kg>1, "TRUE", "FALSE"))
+
+  aggMass_p<-
+    full_join(effMass_p, bioMass_p,  by = c("cas_rn", "substance_name") ) %>% 
+    mutate(aggregate_kg =  if_else(is.na(!!sym(type_eff)) & is.na(!!sym(type_bio)), 
+    NA_real_,                                # Returns a true numeric NA if both are missing
+    coalesce(!!sym(type_eff), 0) + coalesce(!!sym(type_bio), 0)    # Treats individual NAs as 0 and adds them
+    )) %>% 
+    select(-!!sym(type_eff), -!!sym(type_bio)) %>% 
+    arrange(desc(aggregate_kg)) %>% 
+    mutate(reportable = ifelse(aggregate_kg>1, "TRUE", "FALSE"))
+    
+  #Return all three dataframes inside a named list
+  return(list(
+    eff_subset = effMass_p,
+    bio_subset = bioMass_p,
+    agg_report = aggMass_p
+  ))
+}
 #=============
 #import
 #=============
@@ -87,6 +127,9 @@ effUS_spec = read_rds("Table_6.rds") |> clean_pfas()
 ![Reporting guidance](https://www.canada.ca/en/environment-climate-change/services/national-pollutant-release-inventory/report/pfas.html)
 
 Quarto enables you to weave together content and executable code into a finished document. To learn more about Quarto see <https://quarto.org>.
+```{webr}
+below_detection_limit_factor
+```
 
 ```{webr}
 #| exercise: pfas-data
@@ -119,11 +162,108 @@ DT::datatable(
 ```
 
 
-Change the below values according to your plant's annual amount, then click "run code" at the top right of the code-box.
-```{webr-r}
+Change the below values according to your plant's annual amount, then click "run code" at the top right of the code-box.  
+**Note: please enter values as:
+- litres of effluent 
+- dry kilograms of biosolids (e.g. multiplying the annual average of the biosolids total solids to the cubic meter of wet biosolids hauled.) **
+```{webr}
+#| label: input-calc-setup
+#| max-lines: 4
 effluent_L<-999
 biosolid_kg<-123
 
 effluent_L * 1000
 biosolid_kg * 5
+
+#mass-multiply liquid stream to kg 
+eff_mass <-eff_spec %>%
+  mutate(across(
+    .col = -c(cas_rn, substance_name),
+    .fns = ~. * effluent_L* APP_CONFIG$ng_to_kg
+  ))
+names(eff_mass) <- sub("_ng_l$", "_kg", names(eff_mass))
+  
+bio_mass <- bio_spec %>% 
+  mutate(across(
+    .cols = -c(cas_rn, substance_name),
+    .fns = ~. * biosolid_kg * APP_CONFIG$kg_to_g * APP_CONFIG$ng_to_kg
+  ))
+names(bio_mass) <- sub("_ng_g_dry_weight_basis$", "_kg", names(bio_mass))
 ```
+
+## Environment Canada NPRI default treatment categories  
+NPRI provides  values for wastewater, including PFAS not analyzed by EPA 1633A, based on three sets of treatment parameters.  All combinations of these default liquid & solid types have been pre-calculated and the closest matching to your facility should be selected using the table of content links to the right.
+
+I. Liquid Treatment Type
+- Primary treatment
+- Secondary treatment
+- Tertiary/advanced treatment
+
+II. Solids Treatment Type
+- Dewatering of solids
+- Alkaline 
+- Anaerobic digestion
+- Anaerobic digestion and pelletization
+  
+III. Residential source
+- more than 90%
+- between 70% to 90%
+- less than 70%
+
+```{webr}
+#| label: input-calc-results
+#| exercise: input-calc
+#| autoplay: true
+#| echo: true
+#| edit: false
+calc_1 <- effluent_L * 555
+calc_2 <- biosolid_kg * 10
+
+# Print the results so they display on the page
+print(calc_1)
+print(calc_2)
+```
+
+# Primary Treatment
+
+## Primary Treatment, Greater than 90% res. source & dewatering of solids
+::: {.panel-tabset}
+## Total (Effluent and Biosolids)
+```{webr}
+#| label: primary-treatment-report
+#| exercise: input-calc
+#| autoplay: true
+#| echo: false
+#| edit: false
+
+# 1. Define types and compute reporting variables
+type_eff = "primary_treatment_with_gt_90_pct_residential_sources_kg"
+type_bio = "primary_treatment_with_dewatering_of_solids_gt_90_pct_residential_sources_kg"
+
+rpt <- aggregate_and_report(type_eff = type_eff, type_bio = type_bio)
+
+# 2. Render using DT with Excel download integration
+DT::datatable(
+  rpt\$agg_report,
+  extensions = 'Buttons',
+  caption = htmltools::HTML(paste0(
+    "<strong>Total: ECCC-derived loads</strong><br>",
+    "Effluent Type: ", type_eff, "<br>Biosolid Type: ", type_bio
+  )),
+  options = list(
+    dom = 'Bfrtip',                  # 'B' outputs the action buttons layout top-left
+    buttons = list(
+      list(
+        extend = 'excel',
+        text = '📥 Download as Excel',
+        title = 'ECCC_PFAS_Loads_Report'
+      )
+    ),
+    pageLength = 10,                 # Sets default rows display matrix
+    lengthMenu = c(5, 10, 25, 50),   # Activates the page size selector mapping
+    scrollX = TRUE                   # Protects grid styling layout boundaries
+  )
+)
+```
+
+:::

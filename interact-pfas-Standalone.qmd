@@ -13,7 +13,7 @@ engine: knitr
 filters:
   - webr
 webr:
-  packages: ['dplyr', 'tidyr','readr', 'readxl', 'stringr', 'janitor', 'knitr']
+  packages: ['dplyr', 'tidyr','readr', 'readxl', 'stringr', 'janitor', 'knitr', 'purrr']
 ---
 
 ::: {style="display: none;"}
@@ -127,6 +127,27 @@ url <- "https://jjyh.github.io/npri-default-pfas/Table_7.rds"
 download.file(url, "Table_7.rds")
 eff_spec <- read_rds("Table_7.rds") |> clean_pfas()
 
+url <- "https://jjyh.github.io/npri-default-pfas/Table_6.rds"
+download.file(url, "Table_6.rds")
+eff_specUS <- read_rds("Table_6.rds") |> clean_pfas() |>
+  select(-number_of_wastewater_facilities_tested)
+
+#appending table 6 (US average values to table 7)  
+# 1. Replicate the concentration column across all target columns
+replicated_cols <- map_dfc(target_cols, ~ {
+  eff_specUS %>% 
+    select(average_concentration_ng_l) %>% 
+    rename(!!.x := average_concentration_ng_l)
+})
+# 2. Combine with cas_rn and create the blank substance_name column
+new_rows <- eff_specUS %>% 
+  select(cas_rn) %>% 
+  mutate(substance_name = NA_character_) %>% 
+  bind_cols(replicated_cols)
+# 3. Append to the original table
+eff_spec <- eff_spec %>% 
+  bind_rows(new_rows)
+
 #hard-code workaround for NPRI duplicate column - to remove when NPRI corrects (2026.05.25 - jh)
 bio_spec<-bio_spec |> dplyr::rename(tertiary_treatment_with_alkaline_solids_treatment_gt_90_pct_residential_sources_ng_g_dry_weight_basis = 
          primary_treatment_with_alkaline_solids_treatment_gt_90_pct_residential_sources_ng_g_dry_weight_basis_14)
@@ -138,11 +159,15 @@ bio_spec<-bio_spec |> dplyr::rename(tertiary_treatment_with_alkaline_solids_trea
 # Overview
 NPRI Reporting Guidance is available at [Environment Canada](https://www.canada.ca/en/environment-climate-change/services/national-pollutant-release-inventory/report/pfas.html) and summarized by OCWA Compliance at `//ocwfilecorp/Public/Everyone/PCT/CEPA/National Pollutant Release Inventory (NPRI)`.  Please contact Kaylee Saar at Compliance for more reporting principles and specific NPRI module selections.  
   
-The instruction below pertains only the functionality of the calculator.  Please contact IPOTS (Jane Ho or Chris Adam) for guidance or troubleshooting.  
+The instruction below pertains only the functionality of the calculator.  Please contact IPOTS (Jane Ho or Chris Adam) to arrange one-on-one meetings for guidance or troubleshooting.  
+
+::: {.callout-caution} 
+This calculator uses default ECCC NPRI PFAS concentrations for sites which have not conducted site-specific PFAS sampling.  If your facility has conducted PFAS sampling, the lab analysis must be used instead of these default values - please contact Kaylee or Jane for further information.
+:::
 
 # Workflow
 ::: {.callout-important} 
-**To remove if IT permits standalone html issuance** This html file must be accompanied with its child folder ("interact-pfas-nonStandalone_files") to function with proper formatting.  Both must be unzipped (e.g. if downloaded from OneDrive) and located in the same directory.
+Internet connection is required (default PFAS concentration values are retrieved on-demand from Environment Canada webpage)
 :::
 
 Wait for the above ‘WEBR STATUS: 🟡 Loading…’ shown at the top of the page to change to ‘🟢 Ready!’ to indicate that the calculations code chunks are ready to use.  Users need to click the "Run Code" button at the top left corner of the code chunks to activate calculation for output tables.
